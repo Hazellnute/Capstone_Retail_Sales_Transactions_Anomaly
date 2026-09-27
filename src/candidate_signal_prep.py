@@ -18,6 +18,10 @@ Rules
   R5 impossible travel  : same member (GUEST excluded), two physical stores in
                           different geo_area within 90 minutes
   R6 duplicate account  : member shares phone or email with another member
+
+Records with is_valid_record = FALSE are not evaluated and do not feed the
+cross-transaction checks (R1, R5); they are returned with evaluated = False
+and an exclusion_reason for data-quality follow-up.
 """
 
 from __future__ import annotations
@@ -34,6 +38,8 @@ OPERATING_HOUR_END = 21
 IMPOSSIBLE_TRAVEL_MINUTES = 90
 QTY_LIMIT = {"platinum": 1, "gold": 2}
 GUEST_ID = "GUEST"
+RULE_FIELDS = [("R1", "card_sharing"), ("R2", "tier_mismatch"), ("R3", "outside_hours"),
+               ("R4", "bulk_limited"), ("R5", "impossible_travel"), ("R6", "duplicate_account")]
 
 
 # ---------- helpers ----------------------------------------------------------
@@ -148,16 +154,66 @@ def build_travel_evidence(transactions: list[dict]) -> dict[str, str]:
     return evidence
 
 
+# ---------- data quality -----------------------------------------------------
+def is_valid_record(t: dict) -> bool:
+    """is_valid_record kosong/tidak ada dianggap valid; hanya FALSE eksplisit yang dikecualikan."""
+    v = t.get("is_valid_record")
+    return v is None or str(v).strip() == "" or _is_true(v)
+
+
+def _num(v):
+    try:
+        return float(v) if str(v).strip() != "" else None
+    except (TypeError, ValueError):
+        return None
+
+
+def exclusion_reason(t: dict) -> str:
+    """Alasan record tidak valid, untuk dilaporkan ke pemilik data sebagai temuan data quality."""
+    qty, price, disc = _num(t.get("qty")), _num(t.get("unit_price_idr")), _num(t.get("discount_pct"))
+    reasons = []
+    if qty is None:
+        reasons.append("qty kosong")
+    elif qty <= 0:
+        reasons.append("qty <= 0")
+    if price is not None and price <= 0:
+        reasons.append("harga satuan <= 0")
+    if disc is not None and not 0 <= disc <= 100:
+        reasons.append("diskon di luar 0-100%")
+    if not parse_dt(t.get("transaction_datetime")):
+        reasons.append("tanggal/jam tidak terbaca")
+    return ", ".join(reasons) or "ditandai tidak valid di sumber (is_valid_record = FALSE)"
+
+
+EXCLUDED_EVIDENCE = "Record tidak valid di sumber (is_valid_record = FALSE) - rule tidak dinilai"
+
+
 # ---------- main step --------------------------------------------------------
 def candidate_signal_prep(transactions: list[dict], members: list[dict]) -> list[dict]:
     member_by_id = {_key(m["member_id"]): m for m in members if m.get("member_id")}
     dup_ev = build_duplicate_evidence(members)
-    card_groups = build_card_groups(transactions)
-    travel_ev = build_travel_evidence(transactions)
+    # Record invalid tidak ikut indeks lintas-transaksi (R1 kartu, R5 travel).
+    valid = [t for t in transactions if is_valid_record(t)]
+    card_groups = build_card_groups(valid)
+    travel_ev = build_travel_evidence(valid)
     verified_at = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
     out = []
     for t in transactions:
+        if not is_valid_record(t):
+            row = dict(t)
+            row["card_identity_key"] = card_key_of(t) or ""
+            for code, name in RULE_FIELDS:
+                row[f"flag_{code}_{name}"] = False
+                row[f"evidence_{code}"] = EXCLUDED_EVIDENCE
+            row.update({
+                "anomaly_count": 0, "is_anomaly": False, "is_anomaly_num": 0,
+                "evaluated": False, "exclusion_reason": exclusion_reason(t),
+                "verified_at": verified_at,
+            })
+            out.append(row)
+            continue
+
         mid = _key(t.get("member_id"))
 
         # R1 card sharing
@@ -223,6 +279,8 @@ def candidate_signal_prep(transactions: list[dict], members: list[dict]) -> list
             "anomaly_count": count,
             "is_anomaly": count > 0,
             "is_anomaly_num": 1 if count > 0 else 0,
+            "evaluated": True,
+            "exclusion_reason": "",
             "verified_at": verified_at,
         })
         out.append(row)
@@ -260,4 +318,6 @@ if __name__ == "__main__":
         w.writeheader()
         w.writerows(rows)
     flagged = sum(r["is_anomaly_num"] for r in rows)
-    print(f"{len(rows)} transaksi diproses, {flagged} terindikasi anomali -> {sys.argv[3]}")
+    excluded = sum(not r["evaluated"] for r in rows)
+    print(f"{len(rows)} transaksi diproses, {excluded} dikecualikan (is_valid_record = FALSE), "
+          f"{flagged} terindikasi anomali -> {sys.argv[3]}")

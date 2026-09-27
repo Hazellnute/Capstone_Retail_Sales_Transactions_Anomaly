@@ -1,12 +1,15 @@
 """Test fixtures — rows mirror the real n8n execution #515837 (27 Sep 2026)
 plus synthetic rows for rules not visible in that run (R1, R3, Gold R4)."""
 def trx(tid, dt, hour, city, member, tier, item_tier, qty, amount, card=True,
-        last4="****0000", bank="BCA", channel="Store", store="Store X", geo=None):
-    return {"transaction_id": tid, "transaction_datetime": dt, "transaction_hour": hour,
-            "store_name": store, "store_city": city, "geo_area": geo or city, "channel": channel,
-            "member_id": member, "member_tier": tier, "item_tier_requirement": item_tier,
-            "qty": qty, "net_amount_idr": amount, "is_card_payment": card,
-            "card_last4": last4, "issuing_bank": bank}
+        last4="****0000", bank="BCA", channel="Store", store="Store X", geo=None, valid=None):
+    row = {"transaction_id": tid, "transaction_datetime": dt, "transaction_hour": hour,
+           "store_name": store, "store_city": city, "geo_area": geo or city, "channel": channel,
+           "member_id": member, "member_tier": tier, "item_tier_requirement": item_tier,
+           "qty": qty, "net_amount_idr": amount, "is_card_payment": card,
+           "card_last4": last4, "issuing_bank": bank}
+    if valid is not None:
+        row["is_valid_record"] = valid
+    return row
 
 TRANSACTIONS = [
     # --- real rows from execution #515837 ---
@@ -27,6 +30,10 @@ TRANSACTIONS = [
     trx("TRX90007", "4/9/26 10:45", 10, "Bali", "MBR10204", "GOLD", "NONE", 1, 700000, card=False),
     trx("TRX90008", "4/10/26 14:00", 14, "Jakarta Selatan", "MBR10205", "GOLD", "NONE", 1, 700000, card=False, geo="Jakarta"),
     trx("TRX90009", "4/10/26 14:30", 14, "Jakarta Utara", "MBR10205", "GOLD", "NONE", 1, 700000, card=False, geo="Jakarta"),
+    # Record invalid (qty kosong, jam 03): pakai kartu TRX90001/2 dan di Bali 20 menit setelah TRX90008.
+    # Kalau ikut dinilai, ia akan memicu R1/R3/R5 dan mencemari evidence transaksi lain.
+    trx("TRX90010", "4/10/26 14:20", 3, "Bali", "MBR10205", "GOLD", "GOLD", "", 0,
+        last4="****7777", bank="BNI", valid="FALSE"),
 ]
 
 MEMBERS = [

@@ -78,12 +78,15 @@ python src/candidate_signal_prep.py \
 python -m pytest
 ```
 
-Output berisi satu baris per transaksi: semua kolom sumber, ditambah `card_identity_key`, `flag_R1…R6`, `evidence_R1…R6`, `anomaly_count`, `is_anomaly`, `is_anomaly_num`, dan `verified_at`.
+Output berisi satu baris per transaksi: semua kolom sumber, ditambah `card_identity_key`, `flag_R1…R6`, `evidence_R1…R6`, `anomaly_count`, `is_anomaly`, `is_anomaly_num`, `evaluated`, `exclusion_reason`, dan `verified_at`.
+
+**Record tidak valid.** Transaksi dengan `is_valid_record = FALSE` **tidak dinilai** dan tidak ikut perbandingan lintas-transaksi (kartu di R1, travel di R5). Record ini tetap muncul di output dengan `evaluated = FALSE` dan `exclusion_reason` (qty kosong, qty ≤ 0, harga satuan ≤ 0, diskon di luar 0–100%), untuk ditindaklanjuti sebagai temuan data quality. Kolom `is_valid_record` yang kosong atau tidak ada dianggap valid.
 
 ### Pengujian
 
 - `tests/fixtures.py` berisi baris-baris dari eksekusi n8n #515837 ditambah baris sintetis untuk R1, R3, dan R4 Gold.
 - Uji parity menjalankan jsCode **asli** dari `n8n/retail_anomaly_workflow_v3.json` di Node.js, lalu membandingkan hasilnya dengan versi Python:
+  - Perbandingan dilakukan atas record valid saja, karena JS v3 tidak mengenal `is_valid_record`.
   - **R2, R3, R4, R6:** hasil flag dan evidence harus identik.
   - **R1 (deviasi disengaja):** JS v3 memberi key `"|"` ke semua transaksi non-kartu, sehingga semuanya dianggap satu kartu. Python tidak menilai R1 bila data kartu tidak lengkap.
   - **R5 (deviasi disengaja):** JS v3 menganggap semua GUEST satu orang dan membandingkan `store_city`. Python mengecualikan GUEST dan membandingkan `geo_area`. Test memastikan Python hanya *menghapus* flag untuk kasus ini, tidak pernah menambah.

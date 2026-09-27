@@ -1,6 +1,6 @@
 import json, shutil, subprocess, unittest
 from pathlib import Path
-from candidate_signal_prep import candidate_signal_prep, card_key_of
+from candidate_signal_prep import candidate_signal_prep, card_key_of, is_valid_record
 from fixtures import TRANSACTIONS, MEMBERS
 
 WORKFLOW_V3 = Path(__file__).resolve().parents[1] / "n8n" / "retail_anomaly_workflow_v3.json"
@@ -36,6 +36,19 @@ class RuleTests(unittest.TestCase):
     def test_R5_same_geo_area_not_flagged(self):
         self.assertFalse(self.r["TRX90008"]["flag_R5_impossible_travel"])
         self.assertFalse(self.r["TRX90009"]["flag_R5_impossible_travel"])
+    # record invalid
+    def test_invalid_record_not_evaluated(self):
+        row = self.r["TRX90010"]
+        self.assertFalse(row["evaluated"]); self.assertFalse(row["is_anomaly"])
+        self.assertEqual(row["anomaly_count"], 0)
+        self.assertEqual(row["exclusion_reason"], "qty kosong")
+        self.assertIn("tidak dinilai", row["evidence_R3"])
+    def test_invalid_record_excluded_from_cross_transaction_rules(self):
+        self.assertNotIn("MBR10205", self.r["TRX90001"]["evidence_R1"])  # R1 kartu
+        self.assertFalse(self.r["TRX90008"]["flag_R5_impossible_travel"])  # R5 Jakarta -> Bali 20 menit
+    def test_valid_rows_marked_evaluated(self):
+        self.assertTrue(self.r["TRX20859"]["evaluated"])
+        self.assertEqual(self.r["TRX20859"]["exclusion_reason"], "")
     # synthetic coverage
     def test_R1_card_sharing(self):
         self.assertTrue(self.r["TRX90001"]["flag_R1_card_sharing"])
@@ -57,13 +70,15 @@ class ParityWithN8nJs(unittest.TestCase):
       R5 - JS memperlakukan semua GUEST sebagai satu orang dan membandingkan store_city
            (Jakarta Selatan vs Jakarta Utara dianggap beda kota). Python mengecualikan
            GUEST dan membandingkan geo_area.
-    R2, R3, R4, R6 harus identik.
+    R2, R3, R4, R6 harus identik. Record is_valid_record = FALSE diuji terpisah (tidak dinilai).
     """
     @classmethod
     def setUpClass(cls):
         wf = json.loads(WORKFLOW_V3.read_text())
         js = next(n for n in wf["nodes"] if n["name"] == "Candidate Signal Prep")["parameters"]["jsCode"]
-        items = [{"json": t} for t in TRANSACTIONS] + [{"json": {**m, "member_name": "x"}} for m in MEMBERS]
+        # JS v3 tidak mengenal is_valid_record; bandingkan pada populasi record valid saja.
+        valid = [t for t in TRANSACTIONS if is_valid_record(t)]
+        items = [{"json": t} for t in valid] + [{"json": {**m, "member_name": "x"}} for m in MEMBERS]
         harness = ("const $input={all:()=>" + json.dumps(items) + "};\n"
                    "const out=(function(){" + js + "})();\n"
                    "console.log(JSON.stringify(out.map(o=>o.json)));")
