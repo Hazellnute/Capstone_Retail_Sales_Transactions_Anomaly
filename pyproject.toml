@@ -1,13 +1,14 @@
 [project]
 name = "retail-anomaly-detection"
-version = "0.1.0"
-description = "Deteksi anomali transaksi penjualan retail berbasis rule R1-R6 untuk internal audit"
+version = "0.2.0"
+description = "Candidate Signal Prep (R1-R6): rebuild Python dari n8n Code node untuk deteksi anomali transaksi retail"
 requires-python = ">=3.10"
-dependencies = ["pandas>=2.0", "openpyxl>=3.1"]
+dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+xlsx = ["openpyxl>=3.1"]
+dev = ["pytest>=7", "openpyxl>=3.1"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "tests"]
 testpaths = ["tests"]

@@ -51,20 +51,18 @@ Volume transaksi retail sangat besar, sehingga pengujian manual berbasis sampel 
 └── README.md
 ```
 
-## Fitur Deteksi Anomali (Rule-Based R1–R6)
+## Fitur Deteksi Anomali: Candidate Signal Prep (R1–R6)
 
-Modul Python di `src/anomaly_detection/` menguji **seluruh populasi transaksi** terhadap enam rule berikut:
+`src/candidate_signal_prep.py` adalah versi Python dari Code node **Candidate Signal Prep** di workflow n8n v3. Nama kolom output sama dengan versi n8n, jadi hasilnya bisa ditulis kembali ke spreadsheet verifikasi. Modul inti hanya memakai standard library; `openpyxl` baru diperlukan kalau master member berupa `.xlsx`.
 
-| Kode | Indikator | Kriteria | Catatan implementasi |
-|------|-----------|----------|----------------------|
-| R1 | Card sharing | Kartu yang sama dipakai >1 member | Kartu = `card_last4` + `issuing_bank`. `card_key` tidak dipakai karena ikut memuat tipe pembayaran. Transaksi tanpa bank dan GUEST dikecualikan. |
-| R2 | Tier mismatch | Tier item > tier member | Tier diambil dari master member (fallback ke transaksi). GUEST = tier terendah. |
-| R3 | Di luar jam operasional | Di luar 09:00–21:59 | Pukul 21:xx masih dianggap dalam jam operasional. |
-| R4 | Pembelian massal item terbatas | Qty Platinum > 1 / Gold > 2 | Per transaksi. |
-| R5 | Impossible travel | Transaksi offline member yang sama di dua area berbeda dalam < 90 menit | Dibandingkan per `geo_area`, sehingga perpindahan antar-mal di Jakarta tidak dianggap. Online dan GUEST dikecualikan. |
-| R6 | Akun duplikat | Telepon atau email sama dengan member lain | Telepon dinormalisasi (`0812…` = `62812…`), email di-lowercase. |
-
-Record dengan `is_valid_record = FALSE` **tidak dievaluasi** rule, tetapi dilaporkan beserta alasannya (qty kosong, harga ≤ 0, diskon di luar 0–100%). Gunakan `--include-invalid` untuk ikut mengevaluasinya. Semua parameter ada di `src/anomaly_detection/config.py`.
+| Kode | Indikator | Kriteria |
+|------|-----------|----------|
+| R1 | Card sharing | Kartu yang sama (`card_last4` + `issuing_bank`, tanpa tipe pembayaran) dipakai >1 member. Tidak dinilai bila data kartu tidak lengkap. |
+| R2 | Tier mismatch | Tier item lebih tinggi dari tier member (tier di master member lebih diutamakan) |
+| R3 | Di luar jam operasional | Jam transaksi < 09 atau > 21 (jadi 09:00–21:59 dianggap normal) |
+| R4 | Pembelian massal item terbatas | Qty item Platinum > 1 atau Gold > 2 |
+| R5 | Impossible travel | Member yang sama bertransaksi di dua toko fisik di kota berbeda dalam < 90 menit (online dikecualikan) |
+| R6 | Akun duplikat | Telepon atau email member sama dengan member lain |
 
 ### Cara menjalankan
 
@@ -72,25 +70,22 @@ Record dengan `is_valid_record = FALSE` **tidak dievaluasi** rule, tetapi dilapo
 pip install -r requirements.txt
 
 # Letakkan data di data/raw/ (folder ini di-gitignore karena berisi PII)
-PYTHONPATH=src python -m anomaly_detection \
-  --transactions data/raw/retail_sales_transactions_clean.csv \
-  --members data/raw/member_master_analyze.xlsx \
-  --output reports/output/anomaly_report.xlsx
+python src/candidate_signal_prep.py \
+  data/raw/retail_sales_transactions_clean.csv \
+  data/raw/member_master_analyze.xlsx \
+  reports/output/candidate_signal_prep_output.csv
 
-# Unit test
 python -m pytest
 ```
 
-### Isi laporan (`anomaly_report.xlsx`)
+Output berisi satu baris per transaksi: semua kolom sumber, ditambah `card_identity_key`, `flag_R1…R6`, `evidence_R1…R6`, `anomaly_count`, `is_anomaly`, `is_anomaly_num`, dan `verified_at`.
 
-| Sheet | Isi |
-|-------|-----|
-| `Ringkasan` | Jumlah dan persen transaksi, member, toko, serta nilai net per rule |
-| `Transaksi_Anomali` | Transaksi ber-flag, diurutkan dari jumlah rule terpicu lalu nilai transaksi, lengkap dengan evidence |
-| `Member_Kontak_Duplikat` | Detail kelompok member yang berbagi telepon/email (R6) |
-| `Data_Quality` | Record yang dikecualikan dan alasannya |
-| `Semua_Transaksi` | Seluruh transaksi dengan flag dan evidence per rule |
-| `Parameter` | Parameter rule yang dipakai saat laporan dibuat (untuk jejak audit) |
+### Pengujian
+
+- `tests/fixtures.py` berisi baris-baris dari eksekusi n8n #515837 ditambah baris sintetis untuk R1, R3, dan R4 Gold.
+- Uji parity menjalankan jsCode **asli** dari `n8n/retail_anomaly_workflow_v3.json` di Node.js, lalu membandingkan hasilnya dengan versi Python:
+  - **R2–R6:** hasil flag dan evidence harus identik.
+  - **R1:** satu-satunya deviasi yang disengaja. JS v3 memberi key `"|"` ke semua transaksi non-kartu, sehingga semuanya dianggap satu kartu (false positive). Python tidak menilai R1 bila data kartu tidak lengkap.
 
 ## Tools & Teknologi
 
@@ -105,7 +100,7 @@ Data yang memuat informasi sensitif (nama karyawan, ID pelanggan, dan sejenisnya
 
 ## Status Proyek
 
-- ✅ Deteksi rule-based R1–R6 (Python) beserta laporan Excel dan unit test
+- ✅ Candidate Signal Prep R1–R6 (Python) dengan uji parity terhadap n8n JS v3
 - ✅ Workflow n8n agentic (risk classifier + alert drafting). Lihat [`n8n/`](n8n/README.md)
 - 🚧 Dashboard monitoring dan model anomali statistik/ML
 

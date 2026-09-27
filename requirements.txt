@@ -1,3 +1,3 @@
-pandas>=2.0
-openpyxl>=3.1
+# Modul inti hanya memakai standard library.
+openpyxl>=3.1   # opsional: untuk membaca master member .xlsx
 pytest>=7
