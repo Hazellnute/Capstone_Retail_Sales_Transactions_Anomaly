@@ -1,0 +1,787 @@
+{
+  "name": "Retail Anomaly Agentic Workflow - v3 (Risk Classifier + Alert Drafting)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "months"
+            }
+          ]
+        }
+      },
+      "id": "d5e329c8-9b38-45c0-8409-61320a59858f",
+      "name": "Jadwal Cek Anomali (Bulanan)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1BXSCVwFXfmDdqGJVdPiACSMAgmSf27ug0ttLzk3ZNvE",
+          "cachedResultName": "Retail_sales_transactions_clean_0"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "503275821",
+          "cachedResultName": "retail_sales_transactions_clean"
+        },
+        "options": {}
+      },
+      "id": "ab342533-2627-40d1-bf5e-f82e1806bb73",
+      "name": "Ambil Data Transaksi (Mentah)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        224,
+        16
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "0YxDcAuapV0xU5Fp",
+          "name": "Google Sheets account 38"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "id": "69691964-ca97-4107-a7c7-277cc740c18a",
+      "name": "Gabungkan Transaksi & Member",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        448,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1iaLomQrV9kx6xQGwsgUUAtn8-EdYoTXf39YJoCeHwvY",
+          "cachedResultName": "member_master_analyze"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "231344787",
+          "cachedResultName": "member_master_analyze"
+        },
+        "options": {}
+      },
+      "id": "2859292c-2903-4b7e-9a48-dee8c5becd86",
+      "name": "Ambil Data Member (Mentah)",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        224,
+        208
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "0YxDcAuapV0xU5Fp",
+          "name": "Google Sheets account 38"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst transactions = items.filter(i => i.json.transaction_id !== undefined).map(i => i.json);\nconst members = items.filter(i => i.json.member_name !== undefined).map(i => i.json);\n\nconst tierRank = { regular: 0, silver: 1, gold: 2, platinum: 3 };\nfunction rank(tier) {\n  if (!tier) return -1;\n  const key = String(tier).trim().toLowerCase();\n  return Object.prototype.hasOwnProperty.call(tierRank, key) ? tierRank[key] : -1;\n}\n\nconst memberById = {};\nmembers.forEach(m => { if (m.member_id) memberById[String(m.member_id).trim()] = m; });\n\nconst phoneGroups = {};\nconst emailGroups = {};\nmembers.forEach(m => {\n  if (m.phone_number) {\n    const p = String(m.phone_number).trim();\n    if (!phoneGroups[p]) phoneGroups[p] = [];\n    phoneGroups[p].push(String(m.member_id).trim());\n  }\n  if (m.email) {\n    const e = String(m.email).trim().toLowerCase();\n    if (!emailGroups[e]) emailGroups[e] = [];\n    emailGroups[e].push(String(m.member_id).trim());\n  }\n});\nconst duplicateEvidence = {};\nObject.keys(phoneGroups).forEach(p => {\n  const ids = phoneGroups[p];\n  if (ids.length > 1) {\n    ids.forEach(id => {\n      const others = ids.filter(x => x !== id);\n      duplicateEvidence[id] = (duplicateEvidence[id] || []).concat(\"nomor telepon sama dengan member \" + others.join(\", \"));\n    });\n  }\n});\nObject.keys(emailGroups).forEach(e => {\n  const ids = emailGroups[e];\n  if (ids.length > 1) {\n    ids.forEach(id => {\n      const others = ids.filter(x => x !== id);\n      duplicateEvidence[id] = (duplicateEvidence[id] || []).concat(\"email sama dengan member \" + others.join(\", \"));\n    });\n  }\n});\n\nconst cardGroups = {};\ntransactions.forEach(t => {\n  const cardKey = t.card_key || ((t.card_last4 || \"\") + \"|\" + (t.issuing_bank || \"\"));\n  if (!cardKey || cardKey === \"|\") return;\n  if (!cardGroups[cardKey]) cardGroups[cardKey] = [];\n  if (t.member_id && cardGroups[cardKey].indexOf(t.member_id) === -1) cardGroups[cardKey].push(t.member_id);\n});\n\nconst byMember = {};\ntransactions.forEach(t => {\n  if (!t.member_id) return;\n  if (!byMember[t.member_id]) byMember[t.member_id] = [];\n  byMember[t.member_id].push(t);\n});\nconst travelEvidence = {};\nconst IMPOSSIBLE_TRAVEL_MINUTES = 90;\nObject.keys(byMember).forEach(mid => {\n  const list = byMember[mid].slice().sort((a, b) => new Date(a.transaction_datetime) - new Date(b.transaction_datetime));\n  let i = 1;\n  while (i < list.length) {\n    const prev = list[i - 1];\n    const curr = list[i];\n    const prevCity = prev.store_city || prev.geo_area;\n    const currCity = curr.store_city || curr.geo_area;\n    const prevOnline = String(prev.channel || \"\").trim().toLowerCase() === \"online\" || String(prevCity || \"\").trim().toLowerCase() === \"online\";\n    const currOnline = String(curr.channel || \"\").trim().toLowerCase() === \"online\" || String(currCity || \"\").trim().toLowerCase() === \"online\";\n    if (!prevOnline && !currOnline && prevCity && currCity && prevCity !== currCity) {\n      const diffMinutes = (new Date(curr.transaction_datetime) - new Date(prev.transaction_datetime)) / 60000;\n      if (diffMinutes >= 0 && diffMinutes < IMPOSSIBLE_TRAVEL_MINUTES) {\n        travelEvidence[curr.transaction_id] = prevCity + \" pada \" + prev.transaction_datetime + \" lalu \" + currCity + \" pada \" + curr.transaction_datetime + \" (selisih \" + Math.round(diffMinutes) + \" menit)\";\n        travelEvidence[prev.transaction_id] = travelEvidence[curr.transaction_id];\n      }\n    }\n    i = i + 1;\n  }\n});\n\nconst OPERATING_HOUR_START = 9;\nconst OPERATING_HOUR_END = 21;\n\nconst results = transactions.map(t => {\n  const cardKey = t.card_key || ((t.card_last4 || \"\") + \"|\" + (t.issuing_bank || \"\"));\n  const sharers = (cardGroups[cardKey] || []).filter(id => id !== t.member_id);\n  const flag_R1 = sharers.length > 0;\n  const evidence_R1 = flag_R1 ? (\"Kartu yang sama juga dipakai oleh member \" + sharers.join(\", \")) : \"Tidak ada indikasi kartu dipakai member lain pada batch ini\";\n\n  const memberTier = (t.member_id && memberById[String(t.member_id).trim()] && memberById[String(t.member_id).trim()].member_tier) || t.member_tier;\n  const flag_R2 = rank(t.item_tier_requirement) > rank(memberTier);\n  const evidence_R2 = flag_R2 ? (\"Item membutuhkan tier \" + t.item_tier_requirement + \" namun member bertier \" + memberTier) : \"Tier item sesuai atau di bawah tier member\";\n\n  let hour = t.transaction_hour;\n  if (hour === undefined || hour === null || hour === \"\") {\n    const d = t.transaction_datetime ? new Date(t.transaction_datetime) : null;\n    hour = d && !isNaN(d.getTime()) ? d.getHours() : null;\n  }\n  const flag_R3 = (hour !== null && hour !== undefined) ? (hour < OPERATING_HOUR_START || hour > OPERATING_HOUR_END) : false;\n  const evidence_R3 = flag_R3 ? (\"Transaksi pukul \" + hour + \":00, di luar asumsi jam operasional \" + OPERATING_HOUR_START + \"-\" + OPERATING_HOUR_END) : \"Transaksi dalam rentang jam operasional yang diasumsikan\";\n\n  const tierKey = String(t.item_tier_requirement || \"\").trim().toLowerCase();\n  const qty = Number(t.qty) || 0;\n  let flag_R4 = false;\n  let evidence_R4 = \"Kuantitas dalam batas wajar\";\n  if (tierKey === \"platinum\" && qty > 1) { flag_R4 = true; evidence_R4 = \"Item Platinum dibeli \" + qty + \" pcs, melebihi batas 1\"; }\n  if (tierKey === \"gold\" && qty > 2) { flag_R4 = true; evidence_R4 = \"Item Gold dibeli \" + qty + \" pcs, melebihi batas 2\"; }\n\n  const flag_R5 = Boolean(travelEvidence[t.transaction_id]);\n  const evidence_R5 = flag_R5 ? travelEvidence[t.transaction_id] : \"Tidak ada transaksi lain dari member ini di kota berbeda dalam waktu singkat\";\n\n  const flag_R6 = Boolean(t.member_id && duplicateEvidence[String(t.member_id).trim()]);\n  const evidence_R6 = flag_R6 ? duplicateEvidence[String(t.member_id).trim()].join(\"; \") : \"Tidak ada kontak (telepon/email) yang sama dengan member lain\";\n\n  const anomaly_count = [flag_R1, flag_R2, flag_R3, flag_R4, flag_R5, flag_R6].filter(Boolean).length;\n\n  const rest = {};\n  Object.keys(t).forEach(key => { rest[key] = t[key]; });\n  rest.flag_R1_card_sharing = flag_R1; rest.evidence_R1 = evidence_R1;\n  rest.flag_R2_tier_mismatch = flag_R2; rest.evidence_R2 = evidence_R2;\n  rest.flag_R3_outside_hours = flag_R3; rest.evidence_R3 = evidence_R3;\n  rest.flag_R4_bulk_limited = flag_R4; rest.evidence_R4 = evidence_R4;\n  rest.flag_R5_impossible_travel = flag_R5; rest.evidence_R5 = evidence_R5;\n  rest.flag_R6_duplicate_account = flag_R6; rest.evidence_R6 = evidence_R6;\n  rest.anomaly_count = anomaly_count;\n  rest.is_anomaly = anomaly_count > 0;\n  rest.is_anomaly_num = anomaly_count > 0 ? 1 : 0;\n  rest.verified_at = new Date().toISOString();\n  return { json: rest };\n});\n\nreturn results;"
+      },
+      "id": "616a381a-49c3-457f-b61c-b65bc4b7441a",
+      "name": "Candidate Signal Prep",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.is_anomaly }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              },
+              "rightValue": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f564a953-96dc-485e-baac-38778a3fb259",
+      "name": "Filter Anomali (is_anomaly = true)",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        1104,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1_5s--rAZnDR8PntoJ9ZdunM0_YyEwq5yta1zbrTc0-Q",
+          "cachedResultName": "retail_sales_transactions_clean (verifikasi)"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "503275821",
+          "cachedResultName": "retail_sales_transactions_clean"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "matchingColumns": [
+            "transaction_id"
+          ],
+          "value": {},
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "67c85cf0-8db0-4957-8288-0e806b03568f",
+      "name": "Tulis ke Spreadsheet Verifikasi",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        880,
+        112
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "0YxDcAuapV0xU5Fp",
+          "name": "Google Sheets account 38"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "rowNotExists",
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "t9Rn64YIO0TyjpDQ",
+          "cachedResultName": "agentic_sent_anomaly_alerts"
+        },
+        "matchType": "allConditions",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "transaction_id",
+              "keyValue": "={{ $json.transaction_id }}"
+            }
+          ]
+        }
+      },
+      "id": "fc5a9fd6-f01b-4f32-8672-df823c17063c",
+      "name": "Cek Belum Pernah Dialert",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        1328,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "maxItems": 3,
+        "keep": "lastItems"
+      },
+      "id": "dcc41acb-0586-4c84-a001-cdf1ff068056",
+      "name": "Limit (Maks 3)",
+      "type": "n8n-nodes-base.limit",
+      "typeVersion": 1,
+      "position": [
+        1568,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Transaksi {{ $json.transaction_id }} di {{ $json.store_name }}, member {{ $json.member_id }}, nilai Rp{{ $json.net_amount_idr }}.\n\nRule yang terkonfirmasi anomali ({{ $json.anomaly_count }} total):\n{{ [$json.flag_R1_card_sharing ? (\"R1: \" + $json.evidence_R1) : null, $json.flag_R2_tier_mismatch ? (\"R2: \" + $json.evidence_R2) : null, $json.flag_R3_outside_hours ? (\"R3: \" + $json.evidence_R3) : null, $json.flag_R4_bulk_limited ? (\"R4: \" + $json.evidence_R4) : null, $json.flag_R5_impossible_travel ? (\"R5: \" + $json.evidence_R5) : null, $json.flag_R6_duplicate_account ? (\"R6: \" + $json.evidence_R6) : null].filter(Boolean).join(\"\\n\") }}\n\nTentukan prioritas risiko (High/Medium/Low) untuk transaksi ini beserta alasannya.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "Anda adalah asisten audit internal yang menilai prioritas risiko investigasi untuk transaksi yang sudah terkonfirmasi memiliki indikator anomali. Gunakan kerangka berikut:\n\nHIGH: banyak indikator sekaligus, nilai transaksi signifikan, ada pola berulang, atau bukti lintas-transaksi yang kuat (mis. card sharing dengan banyak member, duplicate account dengan banyak kontak).\nMEDIUM: satu indikator signifikan dengan nilai atau frekuensi yang cukup berarti.\nLOW: satu indikator terisolasi dengan nilai kecil dan/atau ada penjelasan yang masuk akal.\n\nPrioritas ini menunjukkan urgensi investigasi, BUKAN kesimpulan kecurangan. Dasarkan penilaian hanya pada bukti (evidence) yang diberikan. Jangan gunakan istilah fraud/penipuan - gunakan \"indikator anomali\" dan \"memerlukan review\"."
+        }
+      },
+      "id": "cddabaca-b41c-4b24-91e1-81925d64b033",
+      "name": "Risk Classifier Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        1792,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "1ad9de31-5fe9-4491-815f-2a207c4c5f90",
+      "name": "DeepSeek Chat Model (Classifier)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [
+        1792,
+        304
+      ],
+      "credentials": {
+        "deepSeekApi": {
+          "id": "wvbPMO1NBaZ2VV13",
+          "name": "DeepSeek account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{ \"priority\": \"High\", \"rationale\": \"Dua indikator terkonfirmasi (R2, R4) dengan nilai transaksi signifikan Rp5.550.000, menunjukkan pola pembelian yang melanggar batas tier dan kuantitas sekaligus.\" }"
+      },
+      "id": "bfcc1eb7-5b47-47a0-b539-9839c75979ab",
+      "name": "Risk Priority Schema",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        1936,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const original = $(\"Limit (Maks 3)\").item.json;\nconst classified = $json.output;\nconst merged = Object.assign({}, original);\nmerged.priority = classified.priority;\nmerged.priority_rationale = classified.rationale;\nreturn { json: merged };"
+      },
+      "id": "3f97360d-86bd-4f6b-9910-a3819105bb05",
+      "name": "Gabungkan Prioritas",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2144,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Transaksi {{ $json.transaction_id }} di {{ $json.store_name }}, member {{ $json.member_id }}, nilai Rp{{ $json.net_amount_idr }}.\nJumlah indikator anomali terkonfirmasi: {{ $json.anomaly_count }}.\nRule yang terpicu: {{ [$json.flag_R1_card_sharing ? \"R1\" : null, $json.flag_R2_tier_mismatch ? \"R2\" : null, $json.flag_R3_outside_hours ? \"R3\" : null, $json.flag_R4_bulk_limited ? \"R4\" : null, $json.flag_R5_impossible_travel ? \"R5\" : null, $json.flag_R6_duplicate_account ? \"R6\" : null].filter(Boolean).join(\", \") }}.\nPrioritas risiko: {{ $json.priority }}. Alasan: {{ $json.priority_rationale }}\n\nSusun subject email dan body HTML untuk alert audit internal.",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "Anda adalah asisten audit internal yang menyusun draft email alert untuk tim audit. Gunakan bahasa profesional, evidence-first, istilah \"indikator anomali\" dan \"memerlukan review\" - JANGAN PERNAH gunakan kata \"fraud\" atau \"penipuan\" atau menyimpulkan kecurangan. Sesuaikan tingkat detail dengan prioritas: HIGH -> body lengkap dan rinci (semua evidence, tekankan urgensi review), MEDIUM -> body cukup ringkas (poin utama saja), LOW -> body singkat (satu-dua kalimat). Subject harus menyertakan prioritas dan transaction_id. Body dalam format HTML sederhana (paragraf/list), sertakan catatan bahwa ini indikator yang memerlukan review, bukan kesimpulan pelanggaran."
+        }
+      },
+      "id": "a089666f-7da2-4736-9cf3-3b40aebe4613",
+      "name": "Alert Drafting Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        2368,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "453179af-3762-41ce-b856-11b53c2c230a",
+      "name": "DeepSeek Chat Model (Drafter)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+      "typeVersion": 1,
+      "position": [
+        2368,
+        336
+      ],
+      "credentials": {
+        "deepSeekApi": {
+          "id": "wvbPMO1NBaZ2VV13",
+          "name": "DeepSeek account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{ \"subject\": \"[Audit Alert - Medium] TX TRX20702 - 2 indikator anomali\", \"body_html\": \"<p>Terdeteksi transaksi dengan indikator anomali...</p>\" }"
+      },
+      "id": "29876f68-99f9-4573-8c8f-551695c48b1a",
+      "name": "Alert Draft Schema",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        2512,
+        336
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const original = $(\"Gabungkan Prioritas\").item.json;\nconst draft = $json.output;\nconst merged = Object.assign({}, original);\nmerged.alert_subject = draft.subject;\nmerged.alert_body_html = draft.body_html;\nreturn { json: merged };"
+      },
+      "id": "4b99f359-634c-4499-b14a-dfc558a5e51a",
+      "name": "Gabungkan Draft Alert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2720,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "nathalia.triandini@gmail.com",
+        "subject": "={{ $json.alert_subject }}",
+        "message": "={{ $json.alert_body_html }}",
+        "options": {}
+      },
+      "id": "c163d347-1086-4324-9d10-cd6f225b0258",
+      "name": "Kirim Alert Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        3184,
+        224
+      ],
+      "webhookId": "f2baee0f-1531-44bf-8d2c-d45c741f24dc",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "x1G0RNgZduO3RyYj",
+          "name": "Gmail account 20"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "dataTableId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "t9Rn64YIO0TyjpDQ",
+          "cachedResultName": "agentic_sent_anomaly_alerts"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "transaction_id": "={{ $('Gabungkan Draft Alert').item.json.transaction_id }}",
+            "anomaly_rules": "={{ $('Gabungkan Draft Alert').item.json.priority }}",
+            "net_amount_idr": "={{ $('Gabungkan Draft Alert').item.json.net_amount_idr }}",
+            "store_name": "={{ $('Gabungkan Draft Alert').item.json.store_name }}",
+            "member_id": "={{ $('Gabungkan Draft Alert').item.json.member_id }}",
+            "alerted_at": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "transaction_id",
+              "displayName": "transaction_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "anomaly_rules",
+              "displayName": "anomaly_rules",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "net_amount_idr",
+              "displayName": "net_amount_idr",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "store_name",
+              "displayName": "store_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "member_id",
+              "displayName": "member_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "readOnly": false,
+              "removed": false
+            },
+            {
+              "id": "alerted_at",
+              "displayName": "alerted_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "readOnly": false,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "1d169b12-ab49-4f7b-bb99-eb222cd66582",
+      "name": "Catat ke Log Tracker",
+      "type": "n8n-nodes-base.dataTable",
+      "typeVersion": 1.1,
+      "position": [
+        3392,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.priority }}",
+              "operator": {
+                "operation": "equals",
+                "type": "string"
+              },
+              "rightValue": "high"
+            }
+          ],
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          }
+        },
+        "options": {}
+      },
+      "id": "8c4d0eaa-a59d-4095-97f1-2b0b542d9935",
+      "name": "Perlu Approval? (Prioritas HIGH)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2944,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "sendAndWait",
+        "sendTo": "nathalia.triandini@gmail.com",
+        "subject": "=[HIGH - Perlu Approval] {{ $json.alert_subject }}",
+        "message": "={{ $json.alert_body_html }}<hr><p><strong>Prioritas risiko: HIGH.</strong> Mohon klik tombol di bawah setelah review dilakukan untuk menandai transaksi ini sebagai sudah ditinjau.</p>",
+        "approvalOptions": {
+          "values": {
+            "approveLabel": "Approve (Sudah Direview)"
+          }
+        },
+        "options": {
+          "limitWaitTime": {
+            "values": {
+              "resumeAmount": 24
+            }
+          }
+        }
+      },
+      "id": "e4bcd183-dba0-406f-af2c-61b69d584acf",
+      "name": "Kirim & Minta Approval (High)",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        3184,
+        0
+      ],
+      "webhookId": "148ec050-aaed-4ba2-a19f-3e0701fff860",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "x1G0RNgZduO3RyYj",
+          "name": "Gmail account 20"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Jadwal Cek Anomali (Bulanan)": {
+      "main": [
+        [
+          {
+            "node": "Ambil Data Transaksi (Mentah)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ambil Data Member (Mentah)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Data Transaksi (Mentah)": {
+      "main": [
+        [
+          {
+            "node": "Gabungkan Transaksi & Member",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gabungkan Transaksi & Member": {
+      "main": [
+        [
+          {
+            "node": "Candidate Signal Prep",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ambil Data Member (Mentah)": {
+      "main": [
+        [
+          {
+            "node": "Gabungkan Transaksi & Member",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Tulis ke Spreadsheet Verifikasi": {
+      "main": [
+        [
+          {
+            "node": "Filter Anomali (is_anomaly = true)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cek Belum Pernah Dialert": {
+      "main": [
+        [
+          {
+            "node": "Limit (Maks 3)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit (Maks 3)": {
+      "main": [
+        [
+          {
+            "node": "Risk Classifier Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Risk Classifier Agent": {
+      "main": [
+        [
+          {
+            "node": "Gabungkan Prioritas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeepSeek Chat Model (Classifier)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Risk Classifier Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Risk Priority Schema": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Risk Classifier Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gabungkan Prioritas": {
+      "main": [
+        [
+          {
+            "node": "Alert Drafting Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Drafting Agent": {
+      "main": [
+        [
+          {
+            "node": "Gabungkan Draft Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DeepSeek Chat Model (Drafter)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Alert Drafting Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Draft Schema": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Alert Drafting Agent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kirim Alert Email": {
+      "main": [
+        [
+          {
+            "node": "Catat ke Log Tracker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gabungkan Draft Alert": {
+      "main": [
+        [
+          {
+            "node": "Perlu Approval? (Prioritas HIGH)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Perlu Approval? (Prioritas HIGH)": {
+      "main": [
+        [
+          {
+            "node": "Kirim & Minta Approval (High)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Kirim Alert Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kirim & Minta Approval (High)": {
+      "main": [
+        [
+          {
+            "node": "Catat ke Log Tracker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Candidate Signal Prep": {
+      "main": [
+        [
+          {
+            "node": "Tulis ke Spreadsheet Verifikasi",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Anomali (is_anomaly = true)": {
+      "main": [
+        [
+          {
+            "node": "Cek Belum Pernah Dialert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "versionId": "5af290a1-2b64-4ad7-92d2-394fc046ffd5",
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp",
+    "instanceId": "0ac0dd37cddb8701dab8eeb0273c5d3e0490cf4cfc4ec1abb51f5d4fca84aa92"
+  },
+  "nodeGroups": [],
+  "id": "AlJMqM1dSgmXDOor",
+  "tags": []
+}
