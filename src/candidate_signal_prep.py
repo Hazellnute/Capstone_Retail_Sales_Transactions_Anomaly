@@ -15,8 +15,8 @@ Rules
   R2 tier mismatch      : item tier requirement above member tier
   R3 outside hours      : transaction hour < 9 or > 21
   R4 bulk limited item  : Platinum item qty > 1, Gold item qty > 2
-  R5 impossible travel  : same member, two physical stores in different
-                          cities within 90 minutes
+  R5 impossible travel  : same member (GUEST excluded), two physical stores in
+                          different geo_area within 90 minutes
   R6 duplicate account  : member shares phone or email with another member
 """
 
@@ -33,6 +33,7 @@ OPERATING_HOUR_START = 9
 OPERATING_HOUR_END = 21
 IMPOSSIBLE_TRAVEL_MINUTES = 90
 QTY_LIMIT = {"platinum": 1, "gold": 2}
+GUEST_ID = "GUEST"
 
 
 # ---------- helpers ----------------------------------------------------------
@@ -111,11 +112,18 @@ def build_card_groups(transactions: list[dict]) -> dict[str, list[str]]:
     return groups
 
 
+def _area(t: dict) -> str:
+    """Area pembanding R5: geo_area (Jakarta Selatan/Utara/Pusat = Jakarta), fallback store_city."""
+    return str(t.get("geo_area") or t.get("store_city") or "").strip()
+
+
 def build_travel_evidence(transactions: list[dict]) -> dict[str, str]:
     by_member: dict[str, list[dict]] = defaultdict(list)
     for t in transactions:
-        if t.get("member_id"):
-            by_member[t["member_id"]].append(t)
+        mid = _key(t.get("member_id"))
+        # GUEST bukan satu orang: semua non-member berbagi ID yang sama.
+        if mid and mid.upper() != GUEST_ID:
+            by_member[mid].append(t)
 
     evidence: dict[str, str] = {}
     for rows in by_member.values():
@@ -125,7 +133,8 @@ def build_travel_evidence(transactions: list[dict]) -> dict[str, str]:
             cc = curr.get("store_city") or curr.get("geo_area")
             if _is_online(prev, pc) or _is_online(curr, cc):
                 continue
-            if not pc or not cc or pc == cc:
+            pa, ca = _area(prev), _area(curr)
+            if not pa or not ca or pa.lower() == ca.lower():
                 continue
             d0, d1 = parse_dt(prev.get("transaction_datetime")), parse_dt(curr.get("transaction_datetime"))
             if not d0 or not d1:

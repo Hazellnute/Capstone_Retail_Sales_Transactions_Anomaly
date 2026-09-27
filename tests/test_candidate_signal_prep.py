@@ -25,9 +25,17 @@ class RuleTests(unittest.TestCase):
     def test_R6_duplicate_TRX20237(self):
         self.assertEqual(self.r["TRX20237"]["evidence_R6"],
             "nomor telepon sama dengan member MBR10170, MBR10188; email sama dengan member MBR10170")
-    def test_R5_travel_TRX20755(self):
-        self.assertEqual(self.r["TRX20755"]["evidence_R5"],
-            "Jakarta Pusat pada 4/28/26 16:12 lalu Bali pada 4/28/26 17:06 (selisih 54 menit)")
+    def test_R5_guest_not_treated_as_one_person_TRX20755(self):
+        # Di n8n v3 dua guest berbeda (Jakarta Pusat -> Bali, 54 menit) ter-flag R5.
+        self.assertFalse(self.r["TRX20755"]["flag_R5_impossible_travel"])
+        self.assertFalse(self.r["TRX20756"]["flag_R5_impossible_travel"])
+    def test_R5_member_travel_between_areas(self):
+        for tid in ("TRX90006", "TRX90007"):
+            self.assertEqual(self.r[tid]["evidence_R5"],
+                "Jakarta Selatan pada 4/9/26 10:00 lalu Bali pada 4/9/26 10:45 (selisih 45 menit)")
+    def test_R5_same_geo_area_not_flagged(self):
+        self.assertFalse(self.r["TRX90008"]["flag_R5_impossible_travel"])
+        self.assertFalse(self.r["TRX90009"]["flag_R5_impossible_travel"])
     # synthetic coverage
     def test_R1_card_sharing(self):
         self.assertTrue(self.r["TRX90001"]["flag_R1_card_sharing"])
@@ -43,10 +51,13 @@ class RuleTests(unittest.TestCase):
 class ParityWithN8nJs(unittest.TestCase):
     """Runs the ORIGINAL n8n jsCode in Node on the same fixtures and compares every flag.
 
-    Satu deviasi disengaja pada R1: JS v3 memberi key "|" ke semua transaksi non-kartu
-    (card_last4 & bank kosong), sehingga seluruh transaksi non-kartu dianggap memakai
-    satu kartu yang sama (false positive). Python tidak menilai R1 bila data kartu tidak
-    lengkap, dan teks evidence R1 dibuat lebih informatif. Rule lain harus identik.
+    Deviasi disengaja terhadap JS v3 (perbaikan false positive):
+      R1 - JS memberi key "|" ke semua transaksi non-kartu sehingga semuanya dianggap satu
+           kartu. Python tidak menilai R1 bila data kartu tidak lengkap.
+      R5 - JS memperlakukan semua GUEST sebagai satu orang dan membandingkan store_city
+           (Jakarta Selatan vs Jakarta Utara dianggap beda kota). Python mengecualikan
+           GUEST dan membandingkan geo_area.
+    R2, R3, R4, R6 harus identik.
     """
     @classmethod
     def setUpClass(cls):
@@ -59,13 +70,24 @@ class ParityWithN8nJs(unittest.TestCase):
         cls.js_rows = json.loads(subprocess.run(["node", "-e", harness], capture_output=True, text=True, check=True).stdout)
         cls.py = run()
 
-    def test_R2_to_R6_identical_to_original_js(self):
+    def test_R2_R3_R4_R6_identical_to_original_js(self):
         keys = [k for k in self.js_rows[0]
-                if k.startswith(("flag_", "evidence_")) and "R1" not in k]
+                if k.startswith(("flag_", "evidence_")) and "R1" not in k and "R5" not in k]
         mism = [(j["transaction_id"], k, j[k], self.py[j["transaction_id"]][k])
                 for j in self.js_rows for k in keys if j[k] != self.py[j["transaction_id"]][k]]
         self.assertEqual(mism, [], mism)
-        print(f"\n  parity R2-R6: {len(self.js_rows)} rows x {len(keys)} fields identical to n8n JS")
+        print(f"\n  parity R2/R3/R4/R6: {len(self.js_rows)} rows x {len(keys)} fields identical to n8n JS")
+
+    def test_R5_differs_only_for_guest_or_same_geo_area(self):
+        by_id = {t["transaction_id"]: t for t in TRANSACTIONS}
+        for j in self.js_rows:
+            p = self.py[j["transaction_id"]]
+            if j["flag_R5_impossible_travel"] == p["flag_R5_impossible_travel"]:
+                continue
+            # Python tidak pernah menambah flag R5 baru; hanya menghapus kasus GUEST / area sama.
+            self.assertTrue(j["flag_R5_impossible_travel"], j["transaction_id"])
+            t = by_id[j["transaction_id"]]
+            self.assertTrue(t["member_id"] == "GUEST" or t["geo_area"] != t["store_city"], j["transaction_id"])
 
     def test_R1_differs_only_on_incomplete_card_data(self):
         for j in self.js_rows:
@@ -75,11 +97,11 @@ class ParityWithN8nJs(unittest.TestCase):
             else:
                 self.assertFalse(p["flag_R1_card_sharing"], j["transaction_id"])
 
-    def test_anomaly_count_differs_only_by_R1(self):
+    def test_anomaly_count_differs_only_by_R1_R5(self):
         for j in self.js_rows:
             p = self.py[j["transaction_id"]]
-            self.assertEqual(j["anomaly_count"] - j["flag_R1_card_sharing"],
-                             p["anomaly_count"] - p["flag_R1_card_sharing"], j["transaction_id"])
+            strip = lambda r: r["anomaly_count"] - r["flag_R1_card_sharing"] - r["flag_R5_impossible_travel"]
+            self.assertEqual(strip(j), strip(p), j["transaction_id"])
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

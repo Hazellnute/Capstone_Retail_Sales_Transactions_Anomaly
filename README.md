@@ -61,7 +61,7 @@ Volume transaksi retail sangat besar, sehingga pengujian manual berbasis sampel 
 | R2 | Tier mismatch | Tier item lebih tinggi dari tier member (tier di master member lebih diutamakan) |
 | R3 | Di luar jam operasional | Jam transaksi < 09 atau > 21 (jadi 09:00–21:59 dianggap normal) |
 | R4 | Pembelian massal item terbatas | Qty item Platinum > 1 atau Gold > 2 |
-| R5 | Impossible travel | Member yang sama bertransaksi di dua toko fisik di kota berbeda dalam < 90 menit (online dikecualikan) |
+| R5 | Impossible travel | Member yang sama bertransaksi di dua toko fisik di `geo_area` berbeda dalam < 90 menit. Online dan GUEST dikecualikan; antar-mal di dalam Jakarta tidak dihitung. |
 | R6 | Akun duplikat | Telepon atau email member sama dengan member lain |
 
 ### Cara menjalankan
@@ -84,8 +84,9 @@ Output berisi satu baris per transaksi: semua kolom sumber, ditambah `card_ident
 
 - `tests/fixtures.py` berisi baris-baris dari eksekusi n8n #515837 ditambah baris sintetis untuk R1, R3, dan R4 Gold.
 - Uji parity menjalankan jsCode **asli** dari `n8n/retail_anomaly_workflow_v3.json` di Node.js, lalu membandingkan hasilnya dengan versi Python:
-  - **R2–R6:** hasil flag dan evidence harus identik.
-  - **R1:** satu-satunya deviasi yang disengaja. JS v3 memberi key `"|"` ke semua transaksi non-kartu, sehingga semuanya dianggap satu kartu (false positive). Python tidak menilai R1 bila data kartu tidak lengkap.
+  - **R2, R3, R4, R6:** hasil flag dan evidence harus identik.
+  - **R1 (deviasi disengaja):** JS v3 memberi key `"|"` ke semua transaksi non-kartu, sehingga semuanya dianggap satu kartu. Python tidak menilai R1 bila data kartu tidak lengkap.
+  - **R5 (deviasi disengaja):** JS v3 menganggap semua GUEST satu orang dan membandingkan `store_city`. Python mengecualikan GUEST dan membandingkan `geo_area`. Test memastikan Python hanya *menghapus* flag untuk kasus ini, tidak pernah menambah.
 
 ## Tools & Teknologi
 
