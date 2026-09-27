@@ -1,3 +1,0 @@
-# Modul inti hanya memakai standard library.
-openpyxl>=3.1   # opsional: untuk membaca master member .xlsx
-pytest>=7

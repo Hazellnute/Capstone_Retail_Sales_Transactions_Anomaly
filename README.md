@@ -51,46 +51,6 @@ Volume transaksi retail sangat besar, sehingga pengujian manual berbasis sampel 
 └── README.md
 ```
 
-## Fitur Deteksi Anomali: Candidate Signal Prep (R1–R6)
-
-`src/candidate_signal_prep.py` adalah versi Python dari Code node **Candidate Signal Prep** di workflow n8n v3. Nama kolom output sama dengan versi n8n, jadi hasilnya bisa ditulis kembali ke spreadsheet verifikasi. Modul inti hanya memakai standard library; `openpyxl` baru diperlukan kalau master member berupa `.xlsx`.
-
-| Kode | Indikator | Kriteria |
-|------|-----------|----------|
-| R1 | Card sharing | Kartu yang sama (`card_last4` + `issuing_bank`, tanpa tipe pembayaran) dipakai >1 member. Tidak dinilai bila data kartu tidak lengkap. |
-| R2 | Tier mismatch | Tier item lebih tinggi dari tier member (tier di master member lebih diutamakan) |
-| R3 | Di luar jam operasional | Jam transaksi < 09 atau > 21 (jadi 09:00–21:59 dianggap normal) |
-| R4 | Pembelian massal item terbatas | Qty item Platinum > 1 atau Gold > 2 |
-| R5 | Impossible travel | Member yang sama bertransaksi di dua toko fisik di `geo_area` berbeda dalam < 90 menit. Online dan GUEST dikecualikan; antar-mal di dalam Jakarta tidak dihitung. |
-| R6 | Akun duplikat | Telepon atau email member sama dengan member lain |
-
-### Cara menjalankan
-
-```bash
-pip install -r requirements.txt
-
-# Letakkan data di data/raw/ (folder ini di-gitignore karena berisi PII)
-python src/candidate_signal_prep.py \
-  data/raw/retail_sales_transactions_clean.csv \
-  data/raw/member_master_analyze.xlsx \
-  reports/output/candidate_signal_prep_output.csv
-
-python -m pytest
-```
-
-Output berisi satu baris per transaksi: semua kolom sumber, ditambah `card_identity_key`, `flag_R1…R6`, `evidence_R1…R6`, `anomaly_count`, `is_anomaly`, `is_anomaly_num`, `evaluated`, `exclusion_reason`, dan `verified_at`.
-
-**Record tidak valid.** Transaksi dengan `is_valid_record = FALSE` **tidak dinilai** dan tidak ikut perbandingan lintas-transaksi (kartu di R1, travel di R5). Record ini tetap muncul di output dengan `evaluated = FALSE` dan `exclusion_reason` (qty kosong, qty ≤ 0, harga satuan ≤ 0, diskon di luar 0–100%), untuk ditindaklanjuti sebagai temuan data quality. Kolom `is_valid_record` yang kosong atau tidak ada dianggap valid.
-
-### Pengujian
-
-- `tests/fixtures.py` berisi baris-baris dari eksekusi n8n #515837 ditambah baris sintetis untuk R1, R3, dan R4 Gold.
-- Uji parity menjalankan jsCode **asli** dari `n8n/retail_anomaly_workflow_v3.json` di Node.js, lalu membandingkan hasilnya dengan versi Python:
-  - Perbandingan dilakukan atas record valid saja, karena JS v3 tidak mengenal `is_valid_record`.
-  - **R2, R3, R4, R6:** hasil flag dan evidence harus identik.
-  - **R1 (deviasi disengaja):** JS v3 memberi key `"|"` ke semua transaksi non-kartu, sehingga semuanya dianggap satu kartu. Python tidak menilai R1 bila data kartu tidak lengkap.
-  - **R5 (deviasi disengaja):** JS v3 menganggap semua GUEST satu orang dan membandingkan `store_city`. Python mengecualikan GUEST dan membandingkan `geo_area`. Test memastikan Python hanya *menghapus* flag untuk kasus ini, tidak pernah menambah.
-
 ## Tools & Teknologi
 
 - Python (pandas, numpy, scikit-learn, matplotlib/seaborn)
@@ -104,9 +64,7 @@ Data yang memuat informasi sensitif (nama karyawan, ID pelanggan, dan sejenisnya
 
 ## Status Proyek
 
-- ✅ Candidate Signal Prep R1–R6 (Python) dengan uji parity terhadap n8n JS v3
-- ✅ Workflow n8n agentic (risk classifier + alert drafting). Lihat [`n8n/`](n8n/README.md)
-- 🚧 Dashboard monitoring dan model anomali statistik/ML
+🚧 Tahap awal: inisialisasi repository.
 
 ## Author
 
