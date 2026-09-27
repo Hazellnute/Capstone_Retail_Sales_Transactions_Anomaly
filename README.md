@@ -51,6 +51,47 @@ Volume transaksi retail sangat besar, sehingga pengujian manual berbasis sampel 
 └── README.md
 ```
 
+## Fitur Deteksi Anomali (Rule-Based R1–R6)
+
+Modul Python di `src/anomaly_detection/` menguji **seluruh populasi transaksi** terhadap enam rule berikut:
+
+| Kode | Indikator | Kriteria | Catatan implementasi |
+|------|-----------|----------|----------------------|
+| R1 | Card sharing | Kartu yang sama dipakai >1 member | Kartu = `card_last4` + `issuing_bank`. `card_key` tidak dipakai karena ikut memuat tipe pembayaran. Transaksi tanpa bank dan GUEST dikecualikan. |
+| R2 | Tier mismatch | Tier item > tier member | Tier diambil dari master member (fallback ke transaksi). GUEST = tier terendah. |
+| R3 | Di luar jam operasional | Di luar 09:00–21:59 | Pukul 21:xx masih dianggap dalam jam operasional. |
+| R4 | Pembelian massal item terbatas | Qty Platinum > 1 / Gold > 2 | Per transaksi. |
+| R5 | Impossible travel | Transaksi offline member yang sama di dua area berbeda dalam < 90 menit | Dibandingkan per `geo_area`, sehingga perpindahan antar-mal di Jakarta tidak dianggap. Online dan GUEST dikecualikan. |
+| R6 | Akun duplikat | Telepon atau email sama dengan member lain | Telepon dinormalisasi (`0812…` = `62812…`), email di-lowercase. |
+
+Record dengan `is_valid_record = FALSE` **tidak dievaluasi** rule, tetapi dilaporkan beserta alasannya (qty kosong, harga ≤ 0, diskon di luar 0–100%). Gunakan `--include-invalid` untuk ikut mengevaluasinya. Semua parameter ada di `src/anomaly_detection/config.py`.
+
+### Cara menjalankan
+
+```bash
+pip install -r requirements.txt
+
+# Letakkan data di data/raw/ (folder ini di-gitignore karena berisi PII)
+PYTHONPATH=src python -m anomaly_detection \
+  --transactions data/raw/retail_sales_transactions_clean.csv \
+  --members data/raw/member_master_analyze.xlsx \
+  --output reports/output/anomaly_report.xlsx
+
+# Unit test
+python -m pytest
+```
+
+### Isi laporan (`anomaly_report.xlsx`)
+
+| Sheet | Isi |
+|-------|-----|
+| `Ringkasan` | Jumlah dan persen transaksi, member, toko, serta nilai net per rule |
+| `Transaksi_Anomali` | Transaksi ber-flag, diurutkan dari jumlah rule terpicu lalu nilai transaksi, lengkap dengan evidence |
+| `Member_Kontak_Duplikat` | Detail kelompok member yang berbagi telepon/email (R6) |
+| `Data_Quality` | Record yang dikecualikan dan alasannya |
+| `Semua_Transaksi` | Seluruh transaksi dengan flag dan evidence per rule |
+| `Parameter` | Parameter rule yang dipakai saat laporan dibuat (untuk jejak audit) |
+
 ## Tools & Teknologi
 
 - Python (pandas, numpy, scikit-learn, matplotlib/seaborn)
@@ -64,7 +105,9 @@ Data yang memuat informasi sensitif (nama karyawan, ID pelanggan, dan sejenisnya
 
 ## Status Proyek
 
-🚧 Tahap awal: inisialisasi repository.
+- ✅ Deteksi rule-based R1–R6 (Python) beserta laporan Excel dan unit test
+- ✅ Workflow n8n agentic (risk classifier + alert drafting). Lihat [`n8n/`](n8n/README.md)
+- 🚧 Dashboard monitoring dan model anomali statistik/ML
 
 ## Author
 
